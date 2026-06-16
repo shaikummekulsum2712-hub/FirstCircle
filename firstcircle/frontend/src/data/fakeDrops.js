@@ -1,0 +1,62 @@
+export const fakeDrops = [
+  {
+    id: "drop-1",
+    type: "friend",
+    title: "Chill Freshers Circle",
+    description: "A casual circle for freshers who want to meet friendly people without awkward DMs.",
+    date: "Today",
+    time: "4:00 PM",
+    place: "Library Cafe",
+    groupSize: 4,
+    spotsFilled: 3,
+    vibe: ["chill", "freshers", "casual"],
+    audience: "Freshers preferred",
+    status: "open",
+    expiresIn: "2h 15m"
+  },
+  {
+    id: "drop-2",
+    type: "study",
+    title: "DSA Beginner Study Circle",
+    description: "Solve beginner DSA problems together and explain concepts to each other.",
+    date: "Tomorrow",
+    time: "5:00 PM",
+    place: "Study Zone",
+    groupSize: 4,
+    spotsFilled: 2,
+    vibe: ["focused", "beginner-friendly", "study"],
+    audience: "Anyone learning DSA",
+    status: "open",
+    expiresIn: "5h 40m"
+  },
+  {
+    id: "drop-3",
+    type: "build",
+    title: "AI Project Build Circle",
+    description: "Meet people interested in building a small AI web app this weekend.",
+    date: "Saturday",
+    time: "11:00 AM",
+    place: "Club Room",
+    groupSize: 4,
+    spotsFilled: 3,
+    vibe: ["AI/ML", "project", "builders"],
+    audience: "Beginner-friendly builders",
+    status: "almost-full",
+    expiresIn: "1h 20m"
+  },
+  {
+    id: "drop-4",
+    type: "random",
+    title: "Random Campus Hangout",
+    description: "For anyone free today who just wants a safe random group hangout.",
+    date: "Today",
+    time: "6:00 PM",
+    place: "Open Garden",
+    groupSize: 4,
+    spotsFilled: 1,
+    vibe: ["fun", "casual", "open"],
+    audience: "Open to anyone",
+    status: "open",
+    expiresIn: "3h 05m"
+  }
+];
