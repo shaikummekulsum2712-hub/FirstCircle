@@ -1,35 +1,63 @@
-from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import List, Optional
 
-class DropBase(BaseModel):
+from pydantic import BaseModel, field_validator
+
+
+class DropCreate(BaseModel):
+    creator_user_id: int
     title: str
-    description: Optional[str] = None
-    category: str
-    event_time: datetime
-    location_name: str
-    max_members: int = Field(5, ge=3, le=10)
+    description: str
+    circle_type: str
+    location_id: int
+    scheduled_date: str
+    start_time: str
+    end_time: str
+    max_members: int
+    urgency_level: str
+    vibe_tags: List[str] = []
+    expires_at: datetime
 
-class DropCreate(DropBase):
-    pass
+    @field_validator("max_members")
+    @classmethod
+    def validate_max_members(cls, v):
+        if v < 2 or v > 8:
+            raise ValueError("max_members must be between 2 and 8")
+        return v
 
-class DropMemberResponse(BaseModel):
-    profile_id: int
-    joined_at: datetime
-    display_name: str
+    @field_validator("circle_type")
+    @classmethod
+    def validate_circle_type(cls, v):
+        allowed = {"friend", "study", "build", "random"}
+        if v not in allowed:
+            raise ValueError(f"circle_type must be one of {allowed}")
+        return v
 
-    class Config:
-        from_attributes = True
+    @field_validator("urgency_level")
+    @classmethod
+    def validate_urgency_level(cls, v):
+        allowed = {"low", "medium", "high"}
+        if v not in allowed:
+            raise ValueError(f"urgency_level must be one of {allowed}")
+        return v
 
-class VibeVoteCreate(BaseModel):
-    vibe_value: str = Field(..., pattern="^(chill|active|party|intellectual)$")
 
-class DropResponse(DropBase):
+class DropResponse(BaseModel):
     id: int
-    host_id: int
+    creator_user_id: int
+    title: str
+    description: str
+    circle_type: str
+    location_id: int
+    scheduled_date: str
+    start_time: str
+    end_time: str
+    max_members: int
+    current_members: int
     status: str
+    urgency_level: str
+    vibe_tags: List[str]
     created_at: datetime
-    members: List[DropMemberResponse] = []
+    expires_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}

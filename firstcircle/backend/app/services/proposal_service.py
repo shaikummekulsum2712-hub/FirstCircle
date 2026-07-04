@@ -1,85 +1,216 @@
-import json
-from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
-from typing import Optional, List
+"""Proposal service for blind proposals."""
+
+from datetime import datetime
+
 from fastapi import HTTPException
-from ..models.proposal import Proposal
-from ..models.drop import Drop
-from ..models.profile import Profile
-from ..models.circle import Circle
-from ..models.drop_member import DropMember
-from ..models.soft_blacklist import SoftBlacklist
-from ..schemas.proposal_schema import ProposalResponse, ProposalMemberSummary
+from sqlmodel import Session, select
 
-def get_active_proposal_for_profile(db: Session, profile_id: int) -> Optional[Proposal]:
+from app.models.drop import Drop
+from app.models.proposal import Proposal
+from app.models.proposal_participant import ProposalParticipant
+from app.models.user import User
+
+
+def create_proposal(drop_id: int, required_accept_count: int, session: Session) -> Proposal:
     """
-    Returns the active proposal where this profile is a proposed member.
+    Create a proposal for a drop.
+    
+    Include current joined members as participants.
     """
-    proposals = db.query(Proposal).filter(Proposal.status == "pending").all()
-    for p in proposals:
-        try:
-            members = json.loads(p.members_json)
-            if profile_id in members:
-                return p
-        except json.JSONDecodeError:
-            pass
-    return None
+    # Validate drop exists
+    drop = session.get(Drop, drop_id)
+    if not drop:
+        raise HTTPException(status_code=404, detail="Drop not found")
 
-def vote_on_proposal(db: Session, proposal_id: int, profile_id: int, vote: str) -> Proposal:
-    proposal = db.query(Proposal).filter(Proposal.id == proposal_id).first()
-    if not proposal or proposal.status != "pending":
-        raise HTTPException(status_code=400, detail="No active proposal found")
+    # Get current members from drop_members
+    from app.models.drop_member import DropMember
+    members = session.exec(
+        select(DropMember).where(
+            DropMember.drop_id == drop_id,
+            DropMember.join_status == "joined",
+        )
+    ).all()
 
-    try:
-        members = json.loads(proposal.members_json)
-        votes = json.loads(proposal.votes_json)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Data parsing error")
+    if len(members) == 0:
+        raise HTTPException(status_code=400, detail="Drop has no members")
 
-    if profile_id not in members:
-        raise HTTPException(status_code=403, detail="Not authorized to vote on this proposal")
+    # Create proposal
+    proposal = Proposal(
+        drop_id=drop_id,
+        required_accept_count=required_accept_count,
+        current_accept_count=0,
+        expires_at=datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0),  # Tomorrow midnight
+    )
+    session.add(proposal)
+    session.commit()
+    session.refresh(proposal)
 
-    # Save vote
-    votes[str(profile_id)] = vote
-    proposal.votes_json = json.dumps(votes)
+    # Create participants
+    for member in members:
+        participant = ProposalParticipant(
+            proposal_id=proposal.id,
+            user_id=member.user_id,
+            response_status="pending",
+        )
+        session.add(participant)
 
-    # If any member rejects/skips: the proposal is failed/skipped
-    if vote == "skip":
-        proposal.status = "skipped"
-        # Revert drop status to open so matching can run again
-        drop = db.query(Drop).filter(Drop.id == proposal.drop_id).first()
-        if drop:
-            drop.status = "open"
-            
-        # Add to soft blacklist so we don't match the skipper with these users again
-        for m_id in members:
-            if m_id != profile_id:
-                # Add mutual soft blacklists
-                sb1 = SoftBlacklist(user_id=profile_id, blacklisted_user_id=m_id)
-                sb2 = SoftBlacklist(user_id=m_id, blacklisted_user_id=profile_id)
-                db.add(sb1)
-                db.add(sb2)
-        db.commit()
-        return proposal
-
-    # Check if all members accepted
-    all_accepted = all(votes.get(str(m_id)) == "accept" for m_id in members)
-    if all_accepted:
-        proposal.status = "accepted"
-        
-        # Create Confirmed Circle
-        drop = db.query(Drop).filter(Drop.id == proposal.drop_id).first()
-        if drop:
-            new_circle = Circle(
-                drop_id=drop.id,
-                title=f"{drop.title} Circle",
-                event_time=drop.event_time,
-                location_name=drop.location_name,
-                status="scheduled"
-            )
-            db.add(new_circle)
-            drop.status = "completed"  # Mark drop matching complete
-
-    db.commit()
-    db.refresh(proposal)
+    session.commit()
     return proposal
+
+
+def get_proposal(proposal_id: int, session: Session) -> Proposal:
+    """Get a proposal by ID."""
+    proposal = session.get(Proposal, proposal_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    return proposal
+
+
+def accept_proposal(proposal_id: int, user_id: int, session: Session) -> Proposal:
+    """
+    User accepts a proposal.
+    
+    Increases current_accept_count.
+    If enough accept, proposal status becomes accepted.
+    """
+    # Validate user exists
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get proposal
+    proposal = get_proposal(proposal_id, session)
+
+    # Check if user is a participant
+    participant = session.exec(
+        select(ProposalParticipant).where(
+            ProposalParticipant.proposal_id == proposal_id,
+            ProposalParticipant.user_id == user_id,
+        )
+    ).first()
+
+    if not participant:
+        raise HTTPException(status_code=400, detail="User is not a participant in this proposal")
+
+    # Check if already responded
+    if participant.response_status != "pending":
+        raise HTTPException(status_code=400, detail="User already responded to this proposal")
+
+    # Mark as accepted
+    participant.response_status = "accepted"
+    session.add(participant)
+
+    # Increment accept count
+    proposal.current_accept_count += 1
+
+    # Check if required count reached
+    if proposal.current_accept_count >= proposal.required_accept_count:
+        proposal.status = "accepted"
+
+    session.add(proposal)
+    session.commit()
+    session.refresh(proposal)
+    return proposal
+
+
+def skip_proposal(proposal_id: int, user_id: int, session: Session) -> dict:
+    """
+    User skips a proposal.
+    
+    Creates soft blacklist entries between skipper and other participants.
+    """
+    # Validate user exists
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get proposal
+    proposal = get_proposal(proposal_id, session)
+
+    # Check if user is a participant
+    participant = session.exec(
+        select(ProposalParticipant).where(
+            ProposalParticipant.proposal_id == proposal_id,
+            ProposalParticipant.user_id == user_id,
+        )
+    ).first()
+
+    if not participant:
+        raise HTTPException(status_code=400, detail="User is not a participant in this proposal")
+
+    # Check if already responded
+    if participant.response_status != "pending":
+        raise HTTPException(status_code=400, detail="User already responded to this proposal")
+
+    # Mark as skipped
+    participant.response_status = "skipped"
+    session.add(participant)
+
+    # Create soft blacklist entries with other participants
+    other_participants = session.exec(
+        select(ProposalParticipant).where(
+            ProposalParticipant.proposal_id == proposal_id,
+            ProposalParticipant.user_id != user_id,
+        )
+    ).all()
+
+    from app.models.soft_blacklist import SoftBlacklist
+
+    for other in other_participants:
+        # Blacklist skipper from other
+        blacklist = SoftBlacklist(
+            user_id=other.user_id,
+            blocked_user_id=user_id,
+            reason="Skip proposal",
+        )
+        session.add(blacklist)
+
+    session.commit()
+    return {"message": "Proposal skipped, soft blacklist created"}
+
+
+def expire_proposal(proposal_id: int, session: Session) -> Proposal:
+    """Mark proposal as expired."""
+    proposal = get_proposal(proposal_id, session)
+
+    # Mark all pending participants as expired
+    participants = session.exec(
+        select(ProposalParticipant).where(
+            ProposalParticipant.proposal_id == proposal_id,
+            ProposalParticipant.response_status == "pending",
+        )
+    ).all()
+
+    for p in participants:
+        p.response_status = "expired"
+        session.add(p)
+
+    proposal.status = "expired"
+    session.add(proposal)
+    session.commit()
+    session.refresh(proposal)
+    return proposal
+
+
+def get_user_proposals(user_id: int, session: Session) -> list[Proposal]:
+    """Get all proposals a user participates in."""
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get all participant entries for this user
+    participants = session.exec(
+        select(ProposalParticipant).where(ProposalParticipant.user_id == user_id)
+    ).all()
+
+    # Get unique proposal IDs
+    proposal_ids = set([p.proposal_id for p in participants])
+
+    # Get proposals
+    proposals = []
+    for pid in proposal_ids:
+        proposal = session.get(Proposal, pid)
+        if proposal:
+            proposals.append(proposal)
+
+    return proposals

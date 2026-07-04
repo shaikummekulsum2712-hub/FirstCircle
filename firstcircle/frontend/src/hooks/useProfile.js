@@ -3,6 +3,7 @@ import useLocalStorage from "./useLocalStorage.js";
 const emptyProfile = {
   name: "",
   email: "",
+  rollNumber: "",
   year: "",
   branch: "",
   studentType: "",

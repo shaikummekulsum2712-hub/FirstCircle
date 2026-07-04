@@ -1,99 +1,130 @@
-from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
-from typing import List, Dict
-from ..models.profile import Profile
-from ..models.free_slot import FreeSlot
-from ..models.drop import Drop
-from ..models.drop_member import DropMember
-from ..models.proposal import Proposal
-from ..ml.embedding_service import embedding_service
-from ..ml.clustering import clustering_service
-from .group_builder import build_best_matching_group
+"""
+Auto-place matching orchestration.
 
-def run_auto_place_matching(db: Session, target_category: str = "Social", target_date_str: str = "2026-06-20") -> int:
-    """
-    Finds inactive users with calendar slots on the target day, clusters them by interests,
-    and automatically schedules dynamic drops and blind proposals.
-    Returns the count of created dynamic drops.
-    """
-    # 1. Fetch all profiles who are not already in a pending proposal or confirmed circle
-    # For simplicity in this local version, we fetch all profiles
-    profiles = db.query(Profile).all()
-    if len(profiles) < 3:
-        return 0
+Finds the best open drop for a user based on preferences and scoring rules.
+"""
 
-    # 2. Extract profile vectors for clustering
-    doc_interests = []
-    for p in profiles:
-        interests_list = [t.strip().lower() for t in p.interests.split(",") if t.strip()] if p.interests else []
-        doc_interests.append(interests_list)
-        
-    embedding_service.fit(doc_interests)
+from sqlmodel import Session, select
+
+from app.models.drop import Drop
+from app.models.drop_member import DropMember
+from app.models.location import Location
+from app.models.user import User
+from app.matching.fairness import get_fairness_boost
+from app.matching.scoring import (
+    calculate_total_score,
+    score_circle_type_fit,
+    score_profile_fit,
+    score_time_fit,
+    score_urgency_boost,
+    score_vibe_fit,
+)
+
+
+def find_best_drop(
+    user_id: int,
+    preferred_circle_type: str,
+    preferred_day: str,
+    preferred_start_time: str,
+    preferred_end_time: str,
+    preferred_vibes: list[str],
+    session: Session,
+) -> tuple[Drop, dict]:
+    """
+    Find the best open drop for a user.
     
-    data_points = []
-    for p, doc in zip(profiles, doc_interests):
-        vector = embedding_service.transform(doc)
-        data_points.append((p.id, vector))
+    Returns: (best_drop, score_breakdown_dict)
+    
+    Excludes:
+    - Drops created by same user
+    - Drops already joined by user
+    - Full/expired/cancelled drops
+    - Unsafe locations
+    
+    Scores drops and returns the highest scoring one.
+    """
+    # Validate user exists
+    user = session.get(User, user_id)
+    if not user:
+        return None, {"error": "User not found"}
 
-    # Cluster profiles (target 3 groups)
-    clusters = clustering_service.fit_predict(data_points)
-    drops_created = 0
+    # Get all open drops
+    statement = select(Drop).where(Drop.status == "open")
+    all_drops = session.exec(statement).all()
 
-    # For each cluster, try to find a valid sub-group with schedule overlap
-    for c_idx, member_ids in clusters.items():
-        if len(member_ids) < 3:
+    if not all_drops:
+        return None, {"error": "No open drops available"}
+
+    # Filter drops
+    candidate_drops = []
+    for drop in all_drops:
+        # Exclude creator's own drops
+        if drop.creator_user_id == user_id:
             continue
-        
-        cluster_profiles = [p for p in profiles if p.id in member_ids]
-        
-        # Load free slots for these profiles
-        slots = db.query(FreeSlot).filter(FreeSlot.profile_id.in_(member_ids)).all()
-        slots_by_user: Dict[int, List[FreeSlot]] = {pid: [] for pid in member_ids}
-        for s in slots:
-            slots_by_user[s.profile_id].append(s)
 
-        # Build best group
-        best_group_ids, score = build_best_matching_group(
-            db, cluster_profiles, slots_by_user, min_size=3, max_size=5
+        # Exclude already joined
+        already_joined = session.exec(
+            select(DropMember).where(
+                DropMember.drop_id == drop.id,
+                DropMember.user_id == user_id,
+                DropMember.join_status == "joined",
+            )
+        ).first()
+        if already_joined:
+            continue
+
+        # Exclude if location is unsafe
+        location = session.get(Location, drop.location_id)
+        if not location or not location.is_safe:
+            continue
+
+        candidate_drops.append(drop)
+
+    if not candidate_drops:
+        return None, {"error": "No suitable drops found after filtering"}
+
+    # Score each drop
+    best_drop = None
+    best_score = -1.0
+    best_breakdown = None
+
+    # Get user profile interests (optional, for profile fit scoring)
+    user_interests = []
+    # For MVP, we'll use an empty list if profile/interests not available
+
+    for drop in candidate_drops:
+        # Calculate scores
+        circle_type_fit = score_circle_type_fit(drop, preferred_circle_type)
+        time_fit = score_time_fit(drop, preferred_day, preferred_start_time, preferred_end_time)
+        profile_fit = score_profile_fit(drop, user_interests)
+        vibe_fit = score_vibe_fit(drop, preferred_vibes)
+        urgency_boost = score_urgency_boost(drop)
+        fairness_boost = get_fairness_boost(user_id, session)
+
+        total_score = calculate_total_score(
+            circle_type_fit,
+            time_fit,
+            profile_fit,
+            vibe_fit,
+            urgency_boost,
+            fairness_boost,
         )
 
-        if len(best_group_ids) >= 3 and score > 0:
-            # We found a group! Let's generate a dynamic Drop
-            # Find the overlapping slot day to set target time
-            # For simplicity, default to the Saturday evening or the day matching target_date_str
-            event_time = datetime.strptime(f"{target_date_str} 18:00:00", "%Y-%m-%d %H:%M:%S")
-            
-            # Create Drop
-            new_drop = Drop(
-                host_id=best_group_ids[0],
-                title=f"Auto Connect: {target_category} Drop",
-                description="This drop was auto-created by the matching engine based on your shared availability and interests.",
-                category=target_category,
-                event_time=event_time,
-                location_name="Centrally Selected Coffee Shop",
-                max_members=len(best_group_ids),
-                status="matching"
-            )
-            db.add(new_drop)
-            db.commit()
-            db.refresh(new_drop)
+        # Track best drop
+        if total_score > best_score:
+            best_score = total_score
+            best_drop = drop
+            best_breakdown = {
+                "circle_type_fit": round(circle_type_fit, 2),
+                "time_fit": round(time_fit, 2),
+                "profile_fit": round(profile_fit, 2),
+                "vibe_fit": round(vibe_fit, 2),
+                "urgency_boost": round(urgency_boost, 2),
+                "fairness_boost": round(fairness_boost, 2),
+                "total": round(total_score, 2),
+            }
 
-            # Add members
-            for pid in best_group_ids:
-                member_join = DropMember(drop_id=new_drop.id, profile_id=pid)
-                db.add(member_join)
+    if best_drop is None:
+        return None, {"error": "Could not score any drops"}
 
-            # Generate blind Proposal
-            votes = {str(pid): "pending" for pid in best_group_ids}
-            new_proposal = Proposal(
-                drop_id=new_drop.id,
-                members_json=str(best_group_ids),
-                votes_json=str(votes).replace("'", '"'),
-                status="pending",
-                expires_at=datetime.utcnow() + timedelta(hours=24)
-            )
-            db.add(new_proposal)
-            db.commit()
-            drops_created += 1
-
-    return drops_created
+    return best_drop, best_breakdown

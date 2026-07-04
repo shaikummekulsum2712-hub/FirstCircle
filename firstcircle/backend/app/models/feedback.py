@@ -1,18 +1,16 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, func
-from sqlalchemy.orm import relationship
-from ..database import Base
+from datetime import datetime
+from typing import Optional
 
-class Feedback(Base):
-    __tablename__ = "feedbacks"
+from sqlmodel import Field, SQLModel
 
-    id = Column(Integer, primary_key=True, index=True)
-    circle_id = Column(Integer, ForeignKey("circles.id", ondelete="CASCADE"), nullable=False)
-    reviewer_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
-    reviewee_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
-    rating = Column(Integer, nullable=False)
-    tags = Column(String) # Comma-separated descriptors, e.g. "punctual,quiet"
-    created_at = Column(DateTime, server_default=func.now())
 
-    circle = relationship("Circle", back_populates="feedbacks")
-    reviewer = relationship("Profile", foreign_keys=[reviewer_id])
-    reviewee = relationship("Profile", foreign_keys=[reviewee_id])
+class Feedback(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    circle_id: int = Field(foreign_key="circle.id")
+    user_id: int = Field(foreign_key="user.id")
+    rating: int  # 1-5
+    vibe_match: bool = Field(default=False)
+    felt_safe: bool = Field(default=False)
+    would_meet_again: bool = Field(default=False)
+    comment: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)

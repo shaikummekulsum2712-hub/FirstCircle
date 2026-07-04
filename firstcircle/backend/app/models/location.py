@@ -1,11 +1,11 @@
-from sqlalchemy import Column, Integer, String, Float
-from ..database import Base
+from typing import Optional
 
-class Location(Base):
-    __tablename__ = "locations"
+from sqlmodel import Field, SQLModel
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True, nullable=False)
-    address = Column(String)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
+
+class Location(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    location_type: str
+    is_safe: bool = True
+    allowed_circle_types: str = "friend,study,build,random"

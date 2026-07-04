@@ -1,16 +1,13 @@
-from sqlalchemy import Column, Integer, ForeignKey, DateTime, func, UniqueConstraint
-from sqlalchemy.orm import relationship
-from ..database import Base
+from datetime import datetime
+from typing import Optional
 
-class DropMember(Base):
-    __tablename__ = "drop_members"
+from sqlmodel import Field, SQLModel
 
-    id = Column(Integer, primary_key=True, index=True)
-    drop_id = Column(Integer, ForeignKey("drops.id", ondelete="CASCADE"), nullable=False)
-    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
-    joined_at = Column(DateTime, server_default=func.now())
 
-    drop = relationship("Drop", back_populates="members")
-    profile = relationship("Profile")
-
-    __table_args__ = (UniqueConstraint("drop_id", "profile_id", name="_drop_profile_uc"),)
+class DropMember(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    drop_id: int = Field(foreign_key="drop.id")
+    user_id: int = Field(foreign_key="user.id")
+    role: str  # creator, member
+    join_status: str  # joined, left, removed
+    joined_at: datetime = Field(default_factory=datetime.utcnow)

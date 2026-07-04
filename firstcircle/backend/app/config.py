@@ -1,12 +1,13 @@
-import os
-from dotenv import load_dotenv
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-load_dotenv()
 
-class Settings:
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./firstcircle.db")
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "supersecretkeyfirstcircle1234567890")
-    ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+class Settings(BaseSettings):
+    APP_NAME: str = "FirstCircle"
+    APP_ENV: str = "development"
+    DATABASE_URL: str = "sqlite:///./firstcircle.db"
+    FRONTEND_URL: str = "http://localhost:5173"
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
 
 settings = Settings()

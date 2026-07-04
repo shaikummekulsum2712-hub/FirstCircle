@@ -1,25 +1,43 @@
-from pydantic import BaseModel
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 
-class ProposalMemberSummary(BaseModel):
-    age: Optional[int] = None
-    gender: Optional[str] = None
-    reliability_score: float
-    shared_interests: List[str] = []
+from pydantic import BaseModel
+
+
+class ProposalParticipantResponse(BaseModel):
+    id: int
+    proposal_id: int
+    user_id: int
+    response_status: str
+
+    model_config = {"from_attributes": True}
+
+
+class ProposalCreate(BaseModel):
+    drop_id: int
+    required_accept_count: int
+
 
 class ProposalResponse(BaseModel):
     id: int
     drop_id: int
-    drop_title: str
-    members_summary: List[ProposalMemberSummary] = []
-    votes: Dict[str, str] = {} # e.g. {"1": "accept", "2": "pending"}
     status: str
+    required_accept_count: int
+    current_accept_count: int
     expires_at: datetime
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
-class ProposalVote(BaseModel):
-    vote: str # 'accept' or 'skip'
+
+class ProposalDetailResponse(BaseModel):
+    id: int
+    drop_id: int
+    status: str
+    required_accept_count: int
+    current_accept_count: int
+    participant_count: int
+    expires_at: datetime
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

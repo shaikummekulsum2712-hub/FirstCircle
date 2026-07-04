@@ -1,28 +1,36 @@
-from pydantic import BaseModel
 from datetime import datetime
 from typing import List, Optional
 
-class CircleMemberDetail(BaseModel):
-    profile_id: int
-    display_name: str
-    bio: Optional[str] = None
-    age: Optional[int] = None
-    gender: Optional[str] = None
-    reliability_score: float
-    interests: Optional[str] = None
+from pydantic import BaseModel
+
+
+class CircleMemberResponse(BaseModel):
+    id: int
+    circle_id: int
+    user_id: int
+    attendance_status: str
+    revealed: bool
+
+    model_config = {"from_attributes": True}
+
+
+class CircleCreate(BaseModel):
+    proposal_id: int
+    meeting_place: str
+    meeting_date: str
+    start_time: str
+    end_time: str
+
 
 class CircleResponse(BaseModel):
     id: int
     drop_id: int
-    title: str
-    event_time: datetime
-    location_name: str
+    proposal_id: int
     status: str
+    meeting_place: str
+    meeting_date: str
+    start_time: str
+    end_time: str
     created_at: datetime
-    members: List[CircleMemberDetail] = []
 
-    class Config:
-        from_attributes = True
-
-class RescheduleRequest(BaseModel):
-    proposed_time: datetime
+    model_config = {"from_attributes": True}

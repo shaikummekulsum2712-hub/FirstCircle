@@ -1,16 +1,13 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint
-from sqlalchemy.orm import relationship
-from ..database import Base
+from datetime import datetime
+from typing import Optional
 
-class VibeVote(Base):
-    __tablename__ = "vibe_votes"
+from sqlmodel import Field, SQLModel
 
-    id = Column(Integer, primary_key=True, index=True)
-    drop_id = Column(Integer, ForeignKey("drops.id", ondelete="CASCADE"), nullable=False)
-    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
-    vibe_value = Column(String, nullable=False) # e.g. 'chill', 'active', 'party', 'intellectual'
 
-    drop = relationship("Drop", back_populates="vibe_votes")
-    profile = relationship("Profile")
-
-    __table_args__ = (UniqueConstraint("drop_id", "profile_id", name="_vibe_vote_uc"),)
+class VibeVote(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    drop_id: int = Field(foreign_key="drop.id")
+    user_id: int = Field(foreign_key="user.id")
+    vibe_tag: str
+    vote_type: str  # up, down
+    created_at: datetime = Field(default_factory=datetime.utcnow)

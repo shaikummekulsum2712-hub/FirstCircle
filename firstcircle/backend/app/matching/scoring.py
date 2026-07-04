@@ -1,115 +1,191 @@
-import json
-from typing import List, Dict, Any
-from datetime import datetime, time
-from ..models.profile import Profile
-from ..models.free_slot import FreeSlot
-from ..ml.embedding_service import embedding_service
-from ..ml.similarity import cosine_similarity
+"""
+Scoring module for auto-place matching.
 
-def calculate_time_overlap(slots_by_user: Dict[int, List[FreeSlot]]) -> int:
+Scoring rules (total: 100 points):
+1. Circle type fit: 25 points
+2. Time fit: 25 points
+3. Profile fit: 20 points
+4. Vibe fit: 15 points
+5. Urgency/fill boost: 10 points
+6. Fairness boost: 5 points
+"""
+
+from app.models.drop import Drop
+
+
+def score_circle_type_fit(drop: Drop, preferred_circle_type: str) -> float:
     """
-    Returns the maximum overlap in minutes across all users on any single day of the week.
-    If no overlap of >= 120 minutes (2 hours) exists, returns 0.
-    """
-    user_ids = list(slots_by_user.keys())
-    if len(user_ids) < 2:
-        return 0
-
-    max_overlap_minutes = 0
-
-    # Check each day of the week
-    for day in range(7):
-        # Find overlapping range for this day across all users
-        overlap_start = None
-        overlap_end = None
-        has_overlap = True
-
-        for uid in user_ids:
-            user_slots = [s for s in slots_by_user[uid] if s.day_of_week == day]
-            if not user_slots:
-                has_overlap = False
-                break
-            
-            # Find the slot with max coverage
-            # For simplicity, intersect the union of slots
-            # If multiple slots exist, we take the widest
-            slot_start = min(s.start_time for s in user_slots)
-            slot_end = max(s.end_time for s in user_slots)
-
-            if overlap_start is None:
-                overlap_start = slot_start
-                overlap_end = slot_end
-            else:
-                overlap_start = max(overlap_start, slot_start)
-                overlap_end = min(overlap_end, slot_end)
-
-            if overlap_start >= overlap_end:
-                has_overlap = False
-                break
-
-        if has_overlap and overlap_start is not None and overlap_end is not None:
-            # Calculate overlap duration in minutes
-            try:
-                sh, sm = map(int, overlap_start.split(":"))
-                eh, em = map(int, overlap_end.split(":"))
-                duration = (eh * 60 + em) - (sh * 60 + sm)
-                if duration >= 120:  # 2 hours threshold
-                    max_overlap_minutes = max(max_overlap_minutes, duration)
-            except ValueError:
-                pass
-
-    return max_overlap_minutes
-
-def score_candidate_group(profiles: List[Profile], slots_by_user: Dict[int, List[FreeSlot]]) -> float:
-    """
-    Scores a group of users.
-    Formula: S = w_i * InterestSimilarity + w_t * TimeOverlapMinutes/60 + w_r * AverageReliability
-    """
-    n = len(profiles)
-    if n < 3:
-        return -1000.0
-
-    # 1. Interests Cosine Similarity
-    # Build vocabulary of all profile interests
-    doc_interests = []
-    for p in profiles:
-        interests_list = [t.strip().lower() for t in p.interests.split(",") if t.strip()] if p.interests else []
-        doc_interests.append(interests_list)
+    Score circle type match.
     
-    embedding_service.fit(doc_interests)
-    vectors = [embedding_service.transform(doc) for doc in doc_interests]
+    - exact match: 25 points
+    - preferred is "any": 15 points
+    - mismatch: 0 points
+    """
+    if preferred_circle_type == "any":
+        return 15.0
     
-    # Calculate average pairwise cosine similarity
-    sim_sum = 0.0
-    pairs = 0
-    for i in range(n):
-        for j in range(i + 1, n):
-            sim_sum += cosine_similarity(vectors[i], vectors[j])
-            pairs += 1
-            
-    avg_interest_sim = sim_sum / pairs if pairs > 0 else 0.0
-
-    # 2. Time Overlap (in hours)
-    overlap_minutes = calculate_time_overlap(slots_by_user)
-    if overlap_minutes == 0:
-        return -99999.0  # Hard rejection for no schedule match
-    overlap_hours = overlap_minutes / 60.0
-
-    # 3. Reliability Score
-    reliability_scores = [p.reliability_score for p in profiles]
-    avg_reliability = sum(reliability_scores) / len(reliability_scores)
-    # Penalize extreme deviation in reliability (so high and low scorers aren't grouped randomly)
-    dev_penalty = 0.0
-    if len(reliability_scores) > 1:
-        mean = sum(reliability_scores) / len(reliability_scores)
-        variance = sum((x - mean) ** 2 for x in reliability_scores) / len(reliability_scores)
-        std_dev = variance ** 0.5
-        dev_penalty = std_dev / 10.0  # Subtle penalty for high deviation
-
-    # Coefficients
-    w_i = 40.0   # Interest weighting
-    w_t = 10.0   # Time weighting (per hour)
-    w_r = 0.5    # Reliability average weighting
+    if drop.circle_type == preferred_circle_type:
+        return 25.0
     
-    total_score = (w_i * avg_interest_sim) + (w_t * overlap_hours) + (w_r * avg_reliability) - dev_penalty
-    return total_score
+    return 0.0
+
+
+def score_time_fit(drop: Drop, preferred_day: str, preferred_start_time: str, preferred_end_time: str) -> float:
+    """
+    Score time match.
+    
+    - exact day match and time overlap: 25 points
+    - partial overlap or same day: 12 points
+    - no overlap: 0 points
+    
+    Time overlap logic:
+    - drop_start <= user_end AND drop_end >= user_start (overlap check)
+    """
+    if drop.scheduled_date != preferred_day:
+        # Different day, no time fit
+        return 0.0
+    
+    # Same day, check time overlap
+    try:
+        drop_start = drop.start_time
+        drop_end = drop.end_time
+        user_start = preferred_start_time
+        user_end = preferred_end_time
+        
+        # Simple string comparison works for HH:MM format
+        if drop_start <= user_end and drop_end >= user_start:
+            # Exact match (both requested and drop on same day with overlap)
+            return 25.0
+        else:
+            # Same day but no time overlap
+            return 12.0
+    except Exception:
+        # Time parsing issue, give partial credit
+        return 12.0
+
+
+def score_profile_fit(drop: Drop, user_interests: list[str]) -> float:
+    """
+    Score profile fit using keyword matching.
+    
+    Compare user's interests/skills with drop vibe_tags, title, description.
+    More shared terms = higher score (0-20 points).
+    """
+    if not user_interests:
+        # No user interests, give neutral score
+        return 10.0
+    
+    # Extract keywords from drop
+    drop_keywords = set()
+    
+    # Add vibe tags
+    if drop.vibe_tags:
+        vibe_list = drop.vibe_tags.split(",")
+        drop_keywords.update([v.strip().lower() for v in vibe_list])
+    
+    # Add title words (lowercase, skip short words)
+    if drop.title:
+        title_words = drop.title.lower().split()
+        drop_keywords.update([w for w in title_words if len(w) > 3])
+    
+    # Add description words (lowercase, skip short words)
+    if drop.description:
+        desc_words = drop.description.lower().split()
+        drop_keywords.update([w for w in desc_words if len(w) > 3])
+    
+    # Convert user interests to lowercase
+    user_interests_lower = [i.lower() for i in user_interests]
+    
+    # Count matches
+    matches = 0
+    for interest in user_interests_lower:
+        if interest in drop_keywords:
+            matches += 1
+    
+    # Score: 0-20 based on match ratio
+    if len(user_interests_lower) == 0:
+        return 10.0
+    
+    match_ratio = matches / len(user_interests_lower)
+    score = match_ratio * 20.0
+    
+    return min(score, 20.0)
+
+
+def score_vibe_fit(drop: Drop, preferred_vibes: list[str]) -> float:
+    """
+    Score vibe overlap.
+    
+    Check overlap between preferred_vibes and drop vibe_tags (0-15 points).
+    """
+    if not preferred_vibes:
+        # No vibe preference, neutral score
+        return 7.5
+    
+    if not drop.vibe_tags:
+        # Drop has no vibes, lower score
+        return 0.0
+    
+    # Parse drop vibe tags
+    drop_vibes = set([v.strip().lower() for v in drop.vibe_tags.split(",")])
+    preferred_vibes_lower = set([v.lower() for v in preferred_vibes])
+    
+    # Count overlaps
+    overlaps = len(drop_vibes.intersection(preferred_vibes_lower))
+    
+    if len(preferred_vibes_lower) == 0:
+        return 0.0
+    
+    # Score: ratio of overlap * 15
+    overlap_ratio = overlaps / len(preferred_vibes_lower)
+    score = overlap_ratio * 15.0
+    
+    return min(score, 15.0)
+
+
+def score_urgency_boost(drop: Drop) -> float:
+    """
+    Urgency/fill boost.
+    
+    Drops closer to full get more points, but full drops are excluded.
+    Scale: 0-10 points based on current_members / max_members ratio.
+    """
+    if drop.max_members == 0:
+        return 0.0
+    
+    fill_ratio = drop.current_members / drop.max_members
+    
+    # Score higher as drop fills up (but not at 100%)
+    # Scale to 0-10
+    if fill_ratio < 0.2:
+        return 1.0
+    elif fill_ratio < 0.4:
+        return 3.0
+    elif fill_ratio < 0.6:
+        return 5.0
+    elif fill_ratio < 0.8:
+        return 7.0
+    else:  # 0.8 - 0.99 (not full)
+        return 10.0
+
+
+def calculate_total_score(
+    circle_type_fit: float,
+    time_fit: float,
+    profile_fit: float,
+    vibe_fit: float,
+    urgency_boost: float,
+    fairness_boost: float,
+) -> float:
+    """
+    Calculate total score (0-100).
+    """
+    total = (
+        circle_type_fit +
+        time_fit +
+        profile_fit +
+        vibe_fit +
+        urgency_boost +
+        fairness_boost
+    )
+    return min(total, 100.0)

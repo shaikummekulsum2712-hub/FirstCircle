@@ -1,29 +1,35 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel import Session, select
 
-router = APIRouter(prefix="/locations", tags=["locations"])
+from app.database import get_session
+from app.models.location import Location
+from app.schemas.location_schema import LocationCreate, LocationRead
 
-@router.get("")
-def list_locations():
-    """
-    Returns standard preconfigured coordinates for activities.
-    """
-    return [
-        {
-            "name": "Geek Haven Cafe",
-            "address": "404 Fictional Ave, Downtown",
-            "latitude": 37.7749,
-            "longitude": -122.4194
-        },
-        {
-            "name": "Echo Canyon Trailhead Parking",
-            "address": "State Route 15, Mountain View",
-            "latitude": 37.8044,
-            "longitude": -122.2711
-        },
-        {
-            "name": "Central Market Clocktower",
-            "address": "800 Market St, Center District",
-            "latitude": 37.7891,
-            "longitude": -122.4014
-        }
-    ]
+router = APIRouter(prefix="/locations", tags=["Locations"])
+
+
+@router.get("/", response_model=list[LocationRead])
+def get_locations(session: Session = Depends(get_session)):
+    statement = select(Location)
+    locations = session.exec(statement).all()
+    return locations
+
+
+@router.post("/", response_model=LocationRead)
+def create_location(
+    location_data: LocationCreate,
+    session: Session = Depends(get_session),
+):
+    existing = session.exec(
+        select(Location).where(Location.name == location_data.name)
+    ).first()
+
+    if existing:
+        raise HTTPException(status_code=400, detail="Location already exists")
+
+    location = Location(**location_data.model_dump())
+    session.add(location)
+    session.commit()
+    session.refresh(location)
+
+    return location

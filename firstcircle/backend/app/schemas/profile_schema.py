@@ -1,40 +1,37 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from pydantic import BaseModel
 
-class FreeSlotBase(BaseModel):
-    day_of_week: int = Field(..., ge=0, le=6) # 0 = Monday, 6 = Sunday
-    start_time: str = Field(..., pattern="^[0-2][0-9]:[0-5][0-9]$") # "HH:MM"
-    end_time: str = Field(..., pattern="^[0-2][0-9]:[0-5][0-9]$") # "HH:MM"
 
-class FreeSlotCreate(FreeSlotBase):
-    pass
+class ProfileCreate(BaseModel):
+    user_id: int
+    year: str
+    branch: str
+    student_type: str
+    bio: str = ""
+    interests: list[str] = []
+    comfort_preferences: list[str] = []
+    skills: list[str] = []
 
-class FreeSlotResponse(FreeSlotBase):
-    id: int
-    profile_id: int
 
-    class Config:
-        from_attributes = True
+class ProfileUpdate(BaseModel):
+    year: str | None = None
+    branch: str | None = None
+    student_type: str | None = None
+    bio: str | None = None
+    interests: list[str] | None = None
+    comfort_preferences: list[str] | None = None
+    skills: list[str] | None = None
 
-class ProfileBase(BaseModel):
-    display_name: str
-    bio: Optional[str] = None
-    age: Optional[int] = Field(None, ge=18, le=120)
-    gender: Optional[str] = None
-    interests: Optional[str] = None # Comma-separated
-    comforts: Optional[str] = None   # JSON formatted preferences
 
-class ProfileCreate(ProfileBase):
-    pass
-
-class ProfileUpdate(ProfileBase):
-    pass
-
-class ProfileResponse(ProfileBase):
+class ProfileRead(BaseModel):
     id: int
     user_id: int
-    reliability_score: float
-    free_slots: List[FreeSlotResponse] = []
+    year: str
+    branch: str
+    student_type: str
+    bio: str
+    interests: list[str]
+    comfort_preferences: list[str]
+    skills: list[str]
 
     class Config:
         from_attributes = True

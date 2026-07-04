@@ -1,16 +1,14 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, func
-from sqlalchemy.orm import relationship
-from ..database import Base
+from datetime import datetime
+from typing import Optional
 
-class Proposal(Base):
-    __tablename__ = "proposals"
+from sqlmodel import Field, SQLModel
 
-    id = Column(Integer, primary_key=True, index=True)
-    drop_id = Column(Integer, ForeignKey("drops.id", ondelete="CASCADE"), nullable=False)
-    members_json = Column(Text, nullable=False) # JSON array: [1, 2, 3]
-    votes_json = Column(Text, nullable=False)   # JSON object: {"1": "accept", "2": "pending"}
-    status = Column(String, default="pending")  # 'pending', 'accepted', 'expired', 'skipped'
-    expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
 
-    drop = relationship("Drop", back_populates="proposal")
+class Proposal(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    drop_id: int = Field(foreign_key="drop.id")
+    status: str = Field(default="pending")  # pending, accepted, failed, expired
+    required_accept_count: int
+    current_accept_count: int = Field(default=0)
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=datetime.utcnow)

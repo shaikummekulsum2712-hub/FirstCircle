@@ -1,59 +1,77 @@
-from sqlalchemy.orm import Session
-from typing import List
-from fastapi import HTTPException
-from ..models.feedback import Feedback
-from ..models.report import Report
-from ..models.circle import Circle
-from ..schemas.feedback_schema import FeedbackCreate, ReportCreate
-from ..ml.feedback_model import feedback_affinity_model
-from .reliability_service import update_user_reliability
+"""Feedback service."""
 
-def submit_circle_feedback(db: Session, reviewer_id: int, feedback_data: FeedbackCreate) -> bool:
-    circle = db.query(Circle).filter(Circle.id == feedback_data.circle_id).first()
+from fastapi import HTTPException
+from sqlmodel import Session, select
+
+from app.models.circle import Circle
+from app.models.feedback import Feedback
+from app.models.user import User
+
+
+def submit_feedback(feedback_data: dict, session: Session) -> Feedback:
+    """
+    Submit feedback for a circle from a user.
+    
+    Only one feedback per user per circle.
+    """
+    circle_id = feedback_data["circle_id"]
+    user_id = feedback_data["user_id"]
+
+    # Validate circle exists
+    circle = session.get(Circle, circle_id)
     if not circle:
         raise HTTPException(status_code=404, detail="Circle not found")
 
-    # 1. Process Attendance Ratings (and adjust reliability score accordingly)
-    for att in feedback_data.attendance:
-        # Determine score delta
-        delta = 0.0
-        if att.status == "on-time":
-            delta = 2.0
-        elif att.status == "late":
-            delta = -5.0
-        elif att.status == "no-show":
-            delta = -15.0
-        
-        # Apply score update to database
-        update_user_reliability(db, att.profile_id, att.status, delta)
+    # Validate user exists
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    # 2. Process Peer Vibe Ratings
-    for r in feedback_data.ratings:
-        # Save feedback row in database
-        db_fb = Feedback(
-            circle_id=feedback_data.circle_id,
-            reviewer_id=reviewer_id,
-            reviewee_id=r.profile_id,
-            rating=r.rating,
-            tags=r.tags
+    # Check if feedback already submitted
+    existing = session.exec(
+        select(Feedback).where(
+            Feedback.circle_id == circle_id,
+            Feedback.user_id == user_id,
         )
-        db.add(db_fb)
-        
-        # Feed back into local ML model
-        feedback_affinity_model.update_affinity(reviewer_id, r.profile_id, r.rating)
+    ).first()
 
-    db.commit()
-    return True
+    if existing:
+        raise HTTPException(status_code=400, detail="Feedback already submitted by this user for this circle")
 
-def submit_safety_report(db: Session, reporter_id: int, report_data: ReportCreate) -> Report:
-    new_report = Report(
-        circle_id=report_data.circle_id,
-        reporter_id=reporter_id,
-        reportee_id=report_data.reportee_id,
-        reason=report_data.reason,
-        status="pending"
+    # Create feedback
+    feedback = Feedback(
+        circle_id=circle_id,
+        user_id=user_id,
+        rating=feedback_data.get("rating"),
+        vibe_match=feedback_data.get("vibe_match", False),
+        felt_safe=feedback_data.get("felt_safe", False),
+        would_meet_again=feedback_data.get("would_meet_again", False),
+        comment=feedback_data.get("comment", ""),
     )
-    db.add(new_report)
-    db.commit()
-    db.refresh(new_report)
-    return new_report
+    session.add(feedback)
+    session.commit()
+    session.refresh(feedback)
+    return feedback
+
+
+def get_circle_feedback(circle_id: int, session: Session) -> list[Feedback]:
+    """Get all feedback for a circle."""
+    feedback_list = session.exec(
+        select(Feedback).where(Feedback.circle_id == circle_id)
+    ).all()
+    return feedback_list
+
+
+def get_user_feedback_for_circle(circle_id: int, user_id: int, session: Session) -> Feedback:
+    """Get feedback submitted by a user for a circle."""
+    feedback = session.exec(
+        select(Feedback).where(
+            Feedback.circle_id == circle_id,
+            Feedback.user_id == user_id,
+        )
+    ).first()
+
+    if not feedback:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+
+    return feedback

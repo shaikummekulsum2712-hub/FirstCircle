@@ -1,29 +1,37 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from typing import List
-from ..database import get_db
-from ..utils.security import get_current_user
-from ..models.user import User
-from ..schemas.profile_schema import ProfileResponse, ProfileUpdate, FreeSlotCreate, FreeSlotResponse
-from ..services.profile_service import get_profile_by_user_id, update_profile, set_profile_slots, get_profile_slots
+from sqlmodel import Session
 
-router = APIRouter(prefix="/profile", tags=["profile"])
+from app.database import get_session
+from app.schemas.profile_schema import ProfileCreate, ProfileRead, ProfileUpdate
+from app.services.profile_service import (
+    create_profile,
+    get_profile_by_user_id,
+    update_profile,
+)
 
-@router.get("/me", response_model=ProfileResponse)
-def read_profile(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return get_profile_by_user_id(db, current_user.id)
+router = APIRouter(prefix="/profiles", tags=["Profiles"])
 
-@router.put("/me", response_model=ProfileResponse)
-def edit_profile(profile_data: ProfileUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    return update_profile(db, profile, profile_data)
 
-@router.get("/slots", response_model=List[FreeSlotResponse])
-def read_slots(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    return get_profile_slots(db, profile.id)
+@router.post("/", response_model=ProfileRead)
+def create_student_profile(
+    profile_data: ProfileCreate,
+    session: Session = Depends(get_session),
+):
+    return create_profile(session, profile_data)
 
-@router.post("/slots", response_model=List[FreeSlotResponse])
-def save_slots(slots: List[FreeSlotCreate], current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    return set_profile_slots(db, profile.id, slots)
+
+@router.get("/user/{user_id}", response_model=ProfileRead)
+def get_student_profile(
+    user_id: int,
+    session: Session = Depends(get_session),
+):
+    return get_profile_by_user_id(session, user_id)
+
+
+@router.put("/user/{user_id}", response_model=ProfileRead)
+def update_student_profile(
+    user_id: int,
+    profile_data: ProfileUpdate,
+    session: Session = Depends(get_session),
+):
+    return update_profile(session, user_id, profile_data)

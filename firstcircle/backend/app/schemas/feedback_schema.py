@@ -1,21 +1,35 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from datetime import datetime
+from typing import Optional
 
-class AttendanceConfirmation(BaseModel):
-    profile_id: int
-    status: str = Field(..., pattern="^(on-time|late|no-show)$")
+from pydantic import BaseModel, field_validator
 
-class PeerRating(BaseModel):
-    profile_id: int
-    rating: int = Field(..., ge=1, le=5)
-    tags: Optional[str] = None # comma separated tags like "friendly,helpful"
 
 class FeedbackCreate(BaseModel):
     circle_id: int
-    attendance: List[AttendanceConfirmation]
-    ratings: List[PeerRating]
+    user_id: int
+    rating: int
+    vibe_match: bool = False
+    felt_safe: bool = False
+    would_meet_again: bool = False
+    comment: str = ""
 
-class ReportCreate(BaseModel):
+    @field_validator("rating")
+    @classmethod
+    def validate_rating(cls, v):
+        if v < 1 or v > 5:
+            raise ValueError("Rating must be between 1 and 5")
+        return v
+
+
+class FeedbackResponse(BaseModel):
+    id: int
     circle_id: int
-    reportee_id: int
-    reason: str
+    user_id: int
+    rating: int
+    vibe_match: bool
+    felt_safe: bool
+    would_meet_again: bool
+    comment: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

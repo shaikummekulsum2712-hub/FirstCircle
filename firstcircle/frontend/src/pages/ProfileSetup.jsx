@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PageWrapper from "../components/layout/PageWrapper.jsx";
 import Input from "../components/common/Input.jsx";
@@ -9,10 +10,14 @@ import FreeSlotForm from "../components/profile/FreeSlotForm.jsx";
 import ProfileSummaryCard from "../components/profile/ProfileSummaryCard.jsx";
 import useProfile from "../hooks/useProfile.js";
 import { comfortOptions, interests } from "../data/constants.js";
+import { userService } from "../services/userService.js";
+import { profileService } from "../services/profileService.js";
 
 export default function ProfileSetup() {
   const navigate = useNavigate();
   const { profile, setProfile } = useProfile();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   function updateField(field, value) {
     setProfile({ ...profile, [field]: value });
@@ -32,9 +37,45 @@ export default function ProfileSetup() {
     updateField("freeSlots", profile.freeSlots.filter((_, i) => i !== index));
   }
 
-  function submitProfile(e) {
+  async function submitProfile(e) {
     e.preventDefault();
-    navigate("/dashboard");
+    setError(null);
+    setLoading(true);
+
+    try {
+      if (!profile.name.trim() || !profile.email.trim() || !profile.rollNumber.trim()) {
+        throw new Error("Name, email, and roll number are required.");
+      }
+
+      // Create user first
+      const user = await userService.createUser(profile.email, profile.name, profile.rollNumber);
+      
+      // Create profile next
+      await profileService.createProfile(user.id, {
+        year: profile.year,
+        branch: profile.branch,
+        studentType: profile.studentType,
+        bio: profile.bio,
+        interests: profile.interests,
+        comfort: profile.comfort
+      });
+
+      // Save slots
+      if (profile.freeSlots && profile.freeSlots.length > 0) {
+        await profileService.saveFreeSlots(user.id, profile.freeSlots);
+      }
+
+      navigate("/dashboard");
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Failed to save profile. Running in fallback offline mode.");
+      if (err.message.includes("Failed to fetch") || err.message.includes("offline")) {
+        alert("Server is offline. Profile saved locally.");
+        navigate("/dashboard");
+      }
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -46,9 +87,16 @@ export default function ProfileSetup() {
             <h1 className="mt-1 text-4xl font-black text-slate-950">Tell FirstCircle about you</h1>
             <p className="mt-2 text-slate-600">This helps us place you in better campus Circles.</p>
 
+            {error && (
+              <div className="mt-4 rounded-2xl bg-red-50 p-4 border border-red-200 text-sm font-bold text-red-700">
+                ⚠️ {error}
+              </div>
+            )}
+
             <div className="mt-6 grid gap-4 md:grid-cols-2">
               <Input label="Name" value={profile.name} onChange={(e) => updateField("name", e.target.value)} />
               <Input label="College email" value={profile.email} onChange={(e) => updateField("email", e.target.value)} />
+              <Input label="Roll number" value={profile.rollNumber || ""} placeholder="e.g. 2026-CS-01" onChange={(e) => updateField("rollNumber", e.target.value)} />
 
               <Select label="Year" value={profile.year} onChange={(e) => updateField("year", e.target.value)}>
                 <option value="">Select year</option>
@@ -109,7 +157,9 @@ export default function ProfileSetup() {
 
           <FreeSlotForm slots={profile.freeSlots || []} onAdd={addSlot} onRemove={removeSlot} />
 
-          <Button type="submit" variant="purple" className="w-full">Save Profile & Continue</Button>
+          <Button type="submit" variant="purple" className="w-full" disabled={loading}>
+            {loading ? "Saving Profile..." : "Save Profile & Continue"}
+          </Button>
         </form>
 
         <div className="lg:sticky lg:top-24 lg:self-start">

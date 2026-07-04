@@ -1,14 +1,12 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, func
-from sqlalchemy.orm import relationship
-from ..database import Base
+from typing import Optional
 
-class ReliabilityHistory(Base):
-    __tablename__ = "reliability_history"
+from sqlmodel import Field, SQLModel
 
-    id = Column(Integer, primary_key=True, index=True)
-    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
-    event_type = Column(String, nullable=False) # 'on-time', 'late', 'no-show'
-    delta = Column(Float, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
 
-    profile = relationship("Profile")
+class Reliability(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id")
+    completed_circles: int = Field(default=0)
+    no_shows: int = Field(default=0)
+    reports_received: int = Field(default=0)
+    reliability_score: float = Field(default=5.0)  # Out of 5

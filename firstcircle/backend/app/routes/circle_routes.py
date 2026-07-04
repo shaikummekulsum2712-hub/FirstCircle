@@ -1,44 +1,67 @@
+"""Circle routes for confirmed circles."""
+
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from typing import List
-from ..database import get_db
-from ..utils.security import get_current_user
-from ..models.user import User
-from ..schemas.circle_schema import CircleResponse, RescheduleRequest
-from ..services.profile_service import get_profile_by_user_id
-from ..services.circle_service import get_active_circles_for_profile, get_circle_history_for_profile, get_circle_by_id, request_circle_reschedule
+from sqlmodel import Session
 
-router = APIRouter(prefix="/circles", tags=["circles"])
+from app.database import get_session
+from app.schemas.circle_schema import CircleCreate, CircleResponse
+from app.services.circle_service import (
+    create_circle_from_proposal,
+    get_circle,
+    get_user_circles,
+    mark_circle_complete,
+    set_attendance_status,
+)
 
-@router.get("/active", response_model=List[CircleResponse])
-def get_active_circles(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    circles = get_active_circles_for_profile(db, profile.id)
-    
-    # Hydrate members for response validation
-    result = []
-    for c in circles:
-        hydrated = get_circle_by_id(db, c.id, profile.id)
-        result.append(hydrated)
-    return result
+router = APIRouter(prefix="/api/circles", tags=["circles"])
 
-@router.get("/history", response_model=List[CircleResponse])
-def get_circle_history(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    circles = get_circle_history_for_profile(db, profile.id)
-    
-    result = []
-    for c in circles:
-        hydrated = get_circle_by_id(db, c.id, profile.id)
-        result.append(hydrated)
-    return result
+
+@router.post("/from-proposal/{proposal_id}", response_model=CircleResponse)
+def create_circle_endpoint(
+    proposal_id: int,
+    circle_data: CircleCreate,
+    session: Session = Depends(get_session),
+):
+    """Create a confirmed circle from an accepted proposal."""
+    circle = create_circle_from_proposal(
+        proposal_id,
+        circle_data.meeting_place,
+        circle_data.meeting_date,
+        circle_data.start_time,
+        circle_data.end_time,
+        session,
+    )
+    return circle
+
 
 @router.get("/{circle_id}", response_model=CircleResponse)
-def get_circle(circle_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    return get_circle_by_id(db, circle_id, profile.id)
+def get_circle_endpoint(circle_id: int, session: Session = Depends(get_session)):
+    """Get circle details."""
+    circle = get_circle(circle_id, session)
+    return circle
 
-@router.post("/{circle_id}/reschedule", response_model=CircleResponse)
-def reschedule(circle_id: int, payload: RescheduleRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    return request_circle_reschedule(db, circle_id, profile.id, payload.proposed_time)
+
+@router.get("/user/{user_id}", response_model=list[CircleResponse])
+def get_user_circles_endpoint(user_id: int, session: Session = Depends(get_session)):
+    """Get all circles for a user."""
+    circles = get_user_circles(user_id, session)
+    return circles
+
+
+@router.patch("/{circle_id}/complete", response_model=CircleResponse)
+def mark_complete_endpoint(circle_id: int, session: Session = Depends(get_session)):
+    """Mark circle as completed."""
+    circle = mark_circle_complete(circle_id, session)
+    return circle
+
+
+@router.patch("/{circle_id}/member/{user_id}/attendance", response_model=dict)
+def set_attendance_endpoint(
+    circle_id: int,
+    user_id: int,
+    attendance_status: str,
+    session: Session = Depends(get_session),
+):
+    """Set attendance status for a circle member."""
+    member = set_attendance_status(circle_id, user_id, attendance_status, session)
+    return {"status": "success", "member_id": member.id}

@@ -1,84 +1,93 @@
-import json
+"""Proposal routes for blind proposals."""
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import List
-from ..database import get_db
-from ..utils.security import get_current_user
-from ..models.user import User
-from ..models.profile import Profile
-from ..models.drop import Drop
-from ..schemas.proposal_schema import ProposalResponse, ProposalVote, ProposalMemberSummary
-from ..services.profile_service import get_profile_by_user_id
-from ..services.proposal_service import get_active_proposal_for_profile, vote_on_proposal
+from sqlmodel import Session
 
-router = APIRouter(prefix="/proposals", tags=["proposals"])
+from app.database import get_session
+from app.schemas.proposal_schema import ProposalCreate, ProposalResponse, ProposalDetailResponse
+from app.services.proposal_service import (
+    create_proposal,
+    get_proposal,
+    accept_proposal,
+    skip_proposal,
+    expire_proposal,
+    get_user_proposals,
+)
 
-@router.get("/active", response_model=ProposalResponse)
-def read_active_proposal(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    proposal = get_active_proposal_for_profile(db, profile.id)
-    
-    if not proposal:
-        raise HTTPException(status_code=404, detail="No active matchmaking proposal found")
+router = APIRouter(prefix="/api/proposals", tags=["proposals"])
 
-    # Fetch details for the Drop
-    drop = db.query(Drop).filter(Drop.id == proposal.drop_id).first()
-    drop_title = drop.title if drop else "Dynamic Meetup"
 
-    # Decode members
-    try:
-        member_ids = json.loads(proposal.members_json)
-        votes = json.loads(proposal.votes_json)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Data corruption on proposal record")
+@router.post("/drop/{drop_id}", response_model=ProposalResponse)
+def create_proposal_endpoint(
+    drop_id: int,
+    required_accept_count: int,
+    session: Session = Depends(get_session),
+):
+    """Create a blind proposal for a drop."""
+    proposal = create_proposal(drop_id, required_accept_count, session)
+    return proposal
 
-    # Hydrate blind summaries
-    profiles = db.query(Profile).filter(Profile.id.in_(member_ids)).all()
-    profile_map = {p.id: p for p in profiles}
 
-    members_summary = []
-    
-    # Extract all interests to find common overlaps
-    all_interests = []
-    for pid in member_ids:
-        if pid in profile_map and profile_map[pid].interests:
-            all_interests.extend([t.strip().lower() for t in profile_map[pid].interests.split(",") if t.strip()])
-            
-    # Find tags shared by at least 2 members
-    from collections import Counter
-    interest_counts = Counter(all_interests)
-    shared_tags = [tag for tag, count in interest_counts.items() if count >= 2]
+@router.get("/{proposal_id}", response_model=ProposalDetailResponse)
+def get_proposal_endpoint(proposal_id: int, session: Session = Depends(get_session)):
+    """Get proposal details by ID."""
+    proposal = get_proposal(proposal_id, session)
 
-    for pid in member_ids:
-        if pid in profile_map:
-            p = profile_map[pid]
-            # Match shared tags for this user
-            user_tags = [t.strip().lower() for t in p.interests.split(",") if t.strip()] if p.interests else []
-            overlapping = [tag for tag in user_tags if tag in shared_tags]
-            
-            summary = ProposalMemberSummary(
-                age=p.age,
-                gender=p.gender,
-                reliability_score=p.reliability_score,
-                shared_interests=overlapping
-            )
-            members_summary.append(summary)
+    # Get participant count
+    from app.models.proposal_participant import ProposalParticipant
+    from sqlmodel import select
 
-    return ProposalResponse(
+    participants = session.exec(
+        select(ProposalParticipant).where(ProposalParticipant.proposal_id == proposal_id)
+    ).all()
+
+    return ProposalDetailResponse(
         id=proposal.id,
         drop_id=proposal.drop_id,
-        drop_title=drop_title,
-        members_summary=members_summary,
-        votes=votes,
         status=proposal.status,
+        required_accept_count=proposal.required_accept_count,
+        current_accept_count=proposal.current_accept_count,
+        participant_count=len(participants),
         expires_at=proposal.expires_at,
-        created_at=proposal.created_at
+        created_at=proposal.created_at,
     )
 
-@router.post("/{proposal_id}/vote", response_model=ProposalResponse)
-def submit_vote(proposal_id: int, payload: ProposalVote, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    profile = get_profile_by_user_id(db, current_user.id)
-    proposal = vote_on_proposal(db, proposal_id, profile.id, payload.vote)
-    
-    # Call endpoint again to return properly formatted response
-    return read_active_proposal(current_user, db)
+
+@router.patch("/{proposal_id}/accept", response_model=ProposalResponse)
+def accept_proposal_endpoint(
+    proposal_id: int,
+    user_id: int,
+    session: Session = Depends(get_session),
+):
+    """User accepts the proposal."""
+    proposal = accept_proposal(proposal_id, user_id, session)
+    return proposal
+
+
+@router.patch("/{proposal_id}/skip", response_model=dict)
+def skip_proposal_endpoint(
+    proposal_id: int,
+    user_id: int,
+    session: Session = Depends(get_session),
+):
+    """User skips the proposal."""
+    result = skip_proposal(proposal_id, user_id, session)
+    return result
+
+
+@router.patch("/{proposal_id}/expire", response_model=ProposalResponse)
+def expire_proposal_endpoint(
+    proposal_id: int, session: Session = Depends(get_session)
+):
+    """Expire a proposal."""
+    proposal = expire_proposal(proposal_id, session)
+    return proposal
+
+
+@router.get("/user/{user_id}", response_model=list[ProposalResponse])
+def get_user_proposals_endpoint(
+    user_id: int, session: Session = Depends(get_session)
+):
+    """Get all proposals a user participates in."""
+    proposals = get_user_proposals(user_id, session)
+    return proposals

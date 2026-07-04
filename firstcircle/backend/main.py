@@ -1,54 +1,52 @@
-import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .app.database import engine, Base
-from .app.routes import (
-    auth_routes,
-    profile_routes,
-    drop_routes,
-    proposal_routes,
-    circle_routes,
-    feedback_routes,
-    report_routes,
-    location_routes,
-    auto_place_routes,
-)
-from .app.jobs.scheduler import scheduler_loop
 
-# Initialize database tables
-Base.metadata.create_all(bind=engine)
+from app.config import settings
+from app.database import create_db_and_tables
+from app.routes.auto_place_routes import router as auto_place_router
+from app.routes.circle_routes import router as circle_router
+from app.routes.drop_member_routes import router as drop_member_router
+from app.routes.drop_routes import router as drop_router
+from app.routes.feedback_routes import router as feedback_router
+from app.routes.free_slots_routes import router as free_slot_router
+from app.routes.health_routes import router as health_router
+from app.routes.location_routes import router as location_router
+from app.routes.profile_routes import router as profile_router
+from app.routes.proposal_routes import router as proposal_router
+from app.routes.report_routes import router as report_router
+from app.routes.user_routes import router as user_router
+from app.routes.vibe_vote_routes import router as vibe_vote_router
 
 app = FastAPI(
-    title="FirstCircle API",
-    description="Backend services for matching users into peer connection groups.",
-    version="1.0.0"
+    title=settings.APP_NAME,
+    version="0.2.0",
+    description="Backend API for FirstCircle campus circle matching platform",
 )
 
-# CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all origins for dev simplicity
+    allow_origins=[settings.FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Register routes
-app.include_router(auth_routes.router, prefix="/api")
-app.include_router(profile_routes.router, prefix="/api")
-app.include_router(drop_routes.router, prefix="/api")
-app.include_router(proposal_routes.router, prefix="/api")
-app.include_router(circle_routes.router, prefix="/api")
-app.include_router(feedback_routes.router, prefix="/api")
-app.include_router(report_routes.router, prefix="/api")
-app.include_router(location_routes.router, prefix="/api")
-app.include_router(auto_place_routes.router, prefix="/api")
-
-@app.get("/")
-def index():
-    return {"name": "FirstCircle API", "status": "active"}
 
 @app.on_event("startup")
-async def startup_event():
-    # Run the background job scheduler loop
-    asyncio.create_task(scheduler_loop())
+def on_startup():
+    create_db_and_tables()
+
+
+app.include_router(health_router, prefix="/api")
+app.include_router(location_router, prefix="/api")
+app.include_router(user_router, prefix="/api")
+app.include_router(profile_router, prefix="/api")
+app.include_router(free_slot_router, prefix="/api")
+app.include_router(drop_router, prefix="/api")
+app.include_router(drop_member_router, prefix="/api")
+app.include_router(vibe_vote_router, prefix="/api")
+app.include_router(auto_place_router, prefix="/api")
+app.include_router(proposal_router)
+app.include_router(circle_router)
+app.include_router(feedback_router)
+app.include_router(report_router)

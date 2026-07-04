@@ -1,13 +1,20 @@
-from sqlalchemy import Column, Integer, String, DateTime, func
-from sqlalchemy.orm import relationship
-from ..database import Base
+from datetime import datetime
+from typing import Optional
 
-class User(Base):
-    __tablename__ = "users"
+from sqlmodel import Field, SQLModel
 
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
 
-    profile = relationship("Profile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+class User(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    name: str
+    email: str = Field(index=True, unique=True)
+    roll_number: str = Field(index=True, unique=True)
+
+    college_domain: str
+    email_verified: bool = False
+
+    verification_status: str = "pending"
+    # pending / email_verified / manually_verified / officially_verified / rejected
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)

@@ -1,22 +1,38 @@
-import re
-from fastapi import HTTPException, status
+ALLOWED_COLLEGE_DOMAINS = [
+    "college.edu",
+    "university.ac.in",
+    "student.edu",
+    "gmail.com",  # MVP only. Remove this later for real college verification.
+]
 
-def validate_interests_string(interests: str):
-    """
-    Ensures interest lists contain alphanumeric and comma characters only.
-    """
-    if not interests:
-        return
-    
-    if not re.match(r"^[a-zA-Z0-9,\s#-]+$", interests):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Interests must contain only letters, numbers, spaces, hash tags, and commas."
-        )
 
-def validate_bio_length(bio: str):
-    if bio and len(bio) > 300:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Bio must be 300 characters or less."
-        )
+def extract_email_domain(email: str) -> str:
+    if "@" not in email:
+        return ""
+
+    return email.split("@")[-1].strip().lower()
+
+
+def is_allowed_college_email(email: str) -> bool:
+    domain = extract_email_domain(email)
+    return domain in ALLOWED_COLLEGE_DOMAINS
+
+
+def is_valid_roll_number(roll_number: str) -> bool:
+    cleaned = roll_number.strip()
+
+    if len(cleaned) < 4:
+        return False
+
+    return cleaned.replace("-", "").replace("_", "").isalnum()
+
+
+def list_to_csv(values: list[str]) -> str:
+    return ",".join(item.strip() for item in values if item.strip())
+
+
+def csv_to_list(value: str) -> list[str]:
+    if not value:
+        return []
+
+    return [item.strip() for item in value.split(",") if item.strip()]

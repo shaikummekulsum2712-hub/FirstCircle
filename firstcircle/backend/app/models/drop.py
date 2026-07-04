@@ -1,22 +1,23 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, func
-from sqlalchemy.orm import relationship
-from ..database import Base
+from datetime import datetime
+from typing import Optional
 
-class Drop(Base):
-    __tablename__ = "drops"
+from sqlmodel import Field, SQLModel
 
-    id = Column(Integer, primary_key=True, index=True)
-    host_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
-    title = Column(String, nullable=False)
-    description = Column(Text)
-    category = Column(String, nullable=False)
-    event_time = Column(DateTime, nullable=False)
-    location_name = Column(String, nullable=False)
-    max_members = Column(Integer, default=5)
-    status = Column(String, default="open") # 'open', 'matching', 'completed', 'cancelled'
-    created_at = Column(DateTime, server_default=func.now())
 
-    members = relationship("DropMember", back_populates="drop", cascade="all, delete-orphan")
-    vibe_votes = relationship("VibeVote", back_populates="drop", cascade="all, delete-orphan")
-    proposal = relationship("Proposal", back_populates="drop", uselist=False, cascade="all, delete-orphan")
-    circle = relationship("Circle", back_populates="drop", uselist=False, cascade="all, delete-orphan")
+class Drop(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    creator_user_id: int = Field(foreign_key="user.id")
+    title: str
+    description: str
+    circle_type: str  # friend, study, build, random
+    location_id: int = Field(foreign_key="location.id")
+    scheduled_date: str  # YYYY-MM-DD
+    start_time: str  # HH:MM
+    end_time: str  # HH:MM
+    max_members: int
+    current_members: int = Field(default=1)
+    status: str = Field(default="open")  # open, full, expired, cancelled
+    urgency_level: str  # low, medium, high
+    vibe_tags: str = ""  # CSV string for MVP
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime

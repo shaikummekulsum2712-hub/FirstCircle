@@ -1,128 +1,124 @@
-from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-from fastapi import HTTPException, status
-from ..models.drop import Drop
-from ..models.drop_member import DropMember
-from ..models.vibe_vote import VibeVote
-from ..models.free_slot import FreeSlot
-from ..models.profile import Profile
-from ..models.proposal import Proposal
-from ..schemas.drop_schema import DropCreate
-from ..matching.group_builder import build_best_matching_group
+from datetime import datetime
 
-def create_drop(db: Session, host_profile_id: int, drop_data: DropCreate) -> Drop:
-    new_drop = Drop(
-        host_id=host_profile_id,
+from fastapi import HTTPException
+from sqlmodel import Session, select
+
+from app.models.drop import Drop
+from app.models.location import Location
+from app.models.user import User
+
+
+def create_drop(drop_data, session: Session) -> Drop:
+    """
+    Create a new drop.
+    
+    Business rules:
+    - creator_user_id must exist
+    - location_id must exist and must be safe
+    - status starts as open
+    - current_members starts at 1 (creator)
+    """
+    # Validate creator exists
+    creator = session.get(User, drop_data.creator_user_id)
+    if not creator:
+        raise HTTPException(status_code=404, detail="Creator user not found")
+
+    # Validate location exists and is safe
+    location = session.get(Location, drop_data.location_id)
+    if not location:
+        raise HTTPException(status_code=404, detail="Location not found")
+    if not location.is_safe:
+        raise HTTPException(status_code=400, detail="Location is not safe")
+
+    # Convert vibe_tags list to CSV string
+    vibe_tags_csv = ",".join(drop_data.vibe_tags) if drop_data.vibe_tags else ""
+
+    # Create drop
+    drop = Drop(
+        creator_user_id=drop_data.creator_user_id,
         title=drop_data.title,
         description=drop_data.description,
-        category=drop_data.category,
-        event_time=drop_data.event_time,
-        location_name=drop_data.location_name,
+        circle_type=drop_data.circle_type,
+        location_id=drop_data.location_id,
+        scheduled_date=drop_data.scheduled_date,
+        start_time=drop_data.start_time,
+        end_time=drop_data.end_time,
         max_members=drop_data.max_members,
-        status="open"
+        current_members=1,
+        status="open",
+        urgency_level=drop_data.urgency_level,
+        vibe_tags=vibe_tags_csv,
+        expires_at=drop_data.expires_at,
     )
-    db.add(new_drop)
-    db.commit()
-    db.refresh(new_drop)
 
-    # Host joins by default
-    join_drop(db, new_drop.id, host_profile_id)
-    return new_drop
+    session.add(drop)
+    session.commit()
+    session.refresh(drop)
+    return drop
 
-def get_active_drops(db: Session, category: Optional[str] = None) -> List[Drop]:
-    query = db.query(Drop).filter(Drop.status == "open")
-    if category:
-        query = query.filter(Drop.category == category)
-    return query.all()
 
-def get_drop_by_id(db: Session, drop_id: int) -> Optional[Drop]:
-    return db.query(Drop).filter(Drop.id == drop_id).first()
+def get_all_drops(session: Session, status: str = None) -> list[Drop]:
+    """
+    Get all drops, optionally filtered by status.
+    """
+    statement = select(Drop)
+    if status:
+        statement = statement.where(Drop.status == status)
+    drops = session.exec(statement).all()
+    return drops
 
-def join_drop(db: Session, drop_id: int, profile_id: int) -> DropMember:
-    drop = get_drop_by_id(db, drop_id)
+
+def get_drop_by_id(drop_id: int, session: Session) -> Drop:
+    """
+    Get a drop by ID. Raises 404 if not found.
+    """
+    drop = session.get(Drop, drop_id)
     if not drop:
         raise HTTPException(status_code=404, detail="Drop not found")
-    if drop.status != "open":
-        raise HTTPException(status_code=400, detail="Cannot join a closed drop")
+    return drop
 
-    # Check if already joined
-    existing = db.query(DropMember).filter(
-        DropMember.drop_id == drop_id,
-        DropMember.profile_id == profile_id
-    ).first()
-    if existing:
-        return existing
 
-    new_member = DropMember(drop_id=drop_id, profile_id=profile_id)
-    db.add(new_member)
-    db.commit()
-    db.refresh(new_member)
-    return new_member
-
-def vote_drop_vibe(db: Session, drop_id: int, profile_id: int, vibe: str) -> VibeVote:
-    existing = db.query(VibeVote).filter(
-        VibeVote.drop_id == drop_id,
-        VibeVote.profile_id == profile_id
-    ).first()
-    
-    if existing:
-        existing.vibe_value = vibe
-        db.commit()
-        db.refresh(existing)
-        return existing
-        
-    vote = VibeVote(drop_id=drop_id, profile_id=profile_id, vibe_value=vibe)
-    db.add(vote)
-    db.commit()
-    db.refresh(vote)
-    return vote
-
-def trigger_matching_for_drop(db: Session, drop_id: int) -> Optional[Proposal]:
+def get_drops_by_creator(creator_user_id: int, session: Session) -> list[Drop]:
     """
-    Orchestrates the matching engine to find a group for the drop.
-    If match is found, creates a blind Proposal.
+    Get all drops created by a specific user.
     """
-    drop = get_drop_by_id(db, drop_id)
-    if not drop or drop.status != "open":
-        return None
+    statement = select(Drop).where(Drop.creator_user_id == creator_user_id)
+    drops = session.exec(statement).all()
+    return drops
 
-    # Get joined members
-    members = db.query(DropMember).filter(DropMember.drop_id == drop_id).all()
-    member_profiles = [db.query(Profile).filter(Profile.id == m.profile_id).first() for m in members]
-    member_ids = [p.id for p in member_profiles if p]
 
-    if len(member_ids) < 3:
-        # Not enough members to form a circle
-        return None
+def expire_drop(drop_id: int, session: Session) -> Drop:
+    """
+    Mark a drop as expired.
+    """
+    drop = get_drop_by_id(drop_id, session)
+    drop.status = "expired"
+    session.add(drop)
+    session.commit()
+    session.refresh(drop)
+    return drop
 
-    # Load free slots for these profiles
-    slots = db.query(FreeSlot).filter(FreeSlot.profile_id.in_(member_ids)).all()
-    slots_by_user: Dict[int, List[FreeSlot]] = {pid: [] for pid in member_ids}
-    for s in slots:
-        slots_by_user[s.profile_id].append(s)
 
-    # Run group builder
-    best_group, score = build_best_matching_group(
-        db, member_profiles, slots_by_user, min_size=3, max_size=drop.max_members
-    )
+def cancel_drop(drop_id: int, session: Session) -> Drop:
+    """
+    Mark a drop as cancelled.
+    """
+    drop = get_drop_by_id(drop_id, session)
+    drop.status = "cancelled"
+    session.add(drop)
+    session.commit()
+    session.refresh(drop)
+    return drop
 
-    if not best_group:
-        return None
 
-    # Create Proposal
-    votes = {str(pid): "pending" for pid in best_group}
-    new_proposal = Proposal(
-        drop_id=drop_id,
-        members_json=str(best_group),
-        votes_json=str(votes).replace("'", '"'),
-        status="pending",
-        expires_at=datetime.utcnow() + timedelta(hours=2) # 2 hours countdown standard
-    )
-    db.add(new_proposal)
-
-    # Set drop status to matching
-    drop.status = "matching"
-    db.commit()
-    db.refresh(new_proposal)
-    return new_proposal
+def update_drop_status_if_full(drop_id: int, session: Session) -> Drop:
+    """
+    Check if current_members >= max_members and update status to full if so.
+    """
+    drop = get_drop_by_id(drop_id, session)
+    if drop.current_members >= drop.max_members:
+        drop.status = "full"
+        session.add(drop)
+        session.commit()
+        session.refresh(drop)
+    return drop
